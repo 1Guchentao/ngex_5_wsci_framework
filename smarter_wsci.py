@@ -2,76 +2,93 @@ from pathlib import Path
 from ollama import chat
 import json
 
-
-
 question = """
 I changed my university password this morning.
 Now my Windows laptop won't connect to campus Wi-Fi,
 but my phone still works.
 """
 
-## WRITE ##
-service_status = {
-    "wifi": "operational"
-}
-
 state = {
-    "problem": question,
-    "wi_fi status": "operational",
-    "wi-fi_check": True
+    "problem": question.strip(),
+    "device": "Windows laptop",
+    "wifi_status": "operational"
 }
 
-with open("state.json", "w") as file:
-    json.dump(
-        state,
-        file,
-        indent=2
-    )
+with open("state.json", "w", encoding="utf-8") as file:
+    json.dump(state, file, indent=2)
 
-with open("state.json", "r") as file:
-    state = json.load(file)
+with open("state.json", "r", encoding="utf-8") as file:
+    diagnostic_context = json.load(file)
 
-print(state)
+print("State Loaded.")
+print("-" * 40)
 
-
-## SELECT CONTEXT FILES BASED ON QUESTION
-## Create the function that takes the student's question, takes some keywords and chooses the relevant files from the knowledge base. Return a list of the selected files.
-## For example, if the question has the kyeword "print" or "printer", then the function should return the file "knowledge/printer_setup.txt" in a list.
 def select_context(question):
-    pass
-
+    q_lower = question.lower()
+    selected = []
+    
+    if "password" in q_lower or "wi-fi" in q_lower or "wifi" in q_lower:
+        selected.append(Path("knowledge/password_changes.txt"))
+        selected.append(Path("knowledge/service_status.txt"))
+        selected.append(Path("knowledge/wifi_setup.txt"))
+    if "print" in q_lower:
+        selected.append(Path("knowledge/printing.txt"))
+    if "projector" in q_lower or "display" in q_lower:
+        selected.append(Path("knowledge/classroom_projectors.txt"))
+        
+    return selected
 
 selected_files = select_context(question)
 
-## READ SELECTED FILES and add their contents to the context variable.
 context = ""
-
-
-## 
-## COMPRESS CONTEXT
-## Add logic to compress the context from above by calling Qwen with "context" and the "question" as the parameter
-## The response from Qwen should be the compressed context. Store it in a variable called "compressed_context" 
+for f in selected_files:
+    if f.exists():
+        context += f.read_text(encoding="utf-8") + "\n\n"
 
 def compress_context(context, question):
-    pass
+    compression_prompt = f"Extract only the critical troubleshooting steps from this context to solve this problem: '{question}'.\n\nContext:\n{context}"
+    res = chat(
+        model='qwen3:8b',
+        messages=[{'role': 'user', 'content': compression_prompt}]
+    )
+    return res.message.content
 
+compressed_context = compress_context(context, question)
 
+print("Compressed Context Length:", len(compressed_context))
+print("-" * 40)
 
-## Print the length of the compressed context
-print(len(compressed_context))
+system_prompt = f"""You are an IT diagnostic bot. 
+Use the diagnostic state and the compressed knowledge context to answer.
+Return ONLY a valid JSON object with two keys: "diagnosis" and "solution".
 
-## Now, call Qwen again with the compressed context and the student's question. Store the response in a variable called "response" and print the response from Qwen.
-## Ensure the model produces a structured output 
+Diagnostic Context:
+{json.dumps(diagnostic_context)}
 
+Knowledge Context:
+{compressed_context}
+"""
 
-
+response = chat(
+    model='qwen3:8b',
+    messages=[
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': question}
+    ],
+    format='json'
+)
 
 print(response.message.content)
 
-## WRITE the above output in an artifact called "state"
+try:
+    final_output = json.loads(response.message.content)
+    diagnostic_context["latest_diagnosis"] = final_output.get("diagnosis", "")
+    diagnostic_context["proposed_solution"] = final_output.get("solution", "")
+    diagnostic_context["status"] = "resolved"
+except json.JSONDecodeError:
+    diagnostic_context["error"] = "Failed to parse structured output."
 
-## Update the rest of the code so that it uses the "state" artifact as part of the context. 
-## It is important to ensure that the model uses only the relevant parts from the "state" artifact and not the entire artifact.
-## For this, you may have to think of a good structure for the "state" artifact and how to use it in the context.
+with open("state.json", "w", encoding="utf-8") as file:
+    json.dump(diagnostic_context, file, indent=2)
 
-
+print("\nUpdated state.json has been written.")
